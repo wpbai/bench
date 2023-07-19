@@ -2,7 +2,7 @@
 #
 # Description: A Bench Script by Teddysun
 #
-# Copyright (C) 2015 - 2022 Teddysun <i@teddysun.com>
+# Copyright (C) 2015 - 2023 Teddysun <i@teddysun.com>
 # Thanks: LookBack <admin@dwhd.org>
 # URL: https://teddysun.com/444.html
 # https://github.com/teddysun/across/blob/master/bench.sh
@@ -39,7 +39,7 @@ _exists() {
 }
 
 _exit() {
-    _red "\nThe script has been terminated.\n"
+    _red "\nThe script has been terminated. Cleaning up files...\n"
     # clean up
     rm -fr speedtest.tgz speedtest-cli benchtest_*
     exit 1
@@ -72,9 +72,11 @@ speed_test() {
 speed() {
     speed_test '' 'Speedtest.net'
     speed_test '21541' 'Los Angeles, US'
+    speed_test '43860' 'Dallas, US'
     speed_test '24215' 'Paris, FR'
+    speed_test '28922' 'Amsterdam, NL'
+    speed_test '27594' 'Guangzhou, CN'
     speed_test '32155' 'Hongkong, CN'
-    speed_test '6527'  'Seoul, KR'
     speed_test '7311'  'Singapore, SG'
     speed_test '21569' 'Tokyo, JP'
     speed_test '17758' 'VNPT-HCM, VN'
@@ -229,8 +231,8 @@ install_speedtest() {
 
 print_intro() {
     echo "-------------------- A Bench.sh Script By Teddysun -------------------"
-    echo " Version            : $(_green v2022-06-01)"
-    echo " Usage              : $(_red "wget -qO- https://bibica.net/speedtest | bash")"
+    echo " Version            : $(_green v2023-06-10)"
+    echo " Usage              : $(_red "wget -qO- https://raw.githubusercontent.com/wpbai/bench/main/bench-vietnam.sh | bash")"
 }
 
 # Get System information
@@ -306,6 +308,7 @@ print_system_info() {
     echo " Kernel             : $(_blue "$kern")"
     echo " TCP CC             : $(_yellow "$tcpctrl")"
     echo " Virtualization     : $(_blue "$virt")"
+    echo " IPv4/IPv6          : $online"
 }
 
 print_io_test() {
@@ -351,6 +354,17 @@ print_end_time() {
 
 ! _exists "wget" && _red "Error: wget command not found.\n" && exit 1
 ! _exists "free" && _red "Error: free command not found.\n" && exit 1
+# check for curl/wget
+command -v curl >/dev/null 2>&1 && local_curl=true || unset local_curl
+# test if the host has IPv4/IPv6 connectivity
+[[ ! -z ${local_curl} ]] && ip_check_cmd="curl -s -m 4" || ip_check_cmd="wget -qO- -T 4"
+ipv4_check=$((ping -4 -c 1 -W 4 ipv4.google.com >/dev/null 2>&1 && echo true) || ${ip_check_cmd} -4 icanhazip.com 2> /dev/null)
+ipv6_check=$((ping -6 -c 1 -W 4 ipv6.google.com >/dev/null 2>&1 && echo true) || ${ip_check_cmd} -6 icanhazip.com 2> /dev/null)
+if [[ -z "$ipv4_check" && -z "$ipv6_check" ]]; then
+    _yellow "Warning: Both IPv4 and IPv6 connectivity were not detected.\n"
+fi
+[[ -z "$ipv4_check" ]] && online="$(_red "Offline")" || online="$(_green "Online")"
+[[ -z "$ipv6_check" ]] && online+=" / $(_red "Offline")" || online+=" / $(_green "Online")"
 start_time=$(date +%s)
 get_system_info
 check_virt
