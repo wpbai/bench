@@ -60,6 +60,42 @@ next() {
 # Parameters:
 #          - (none)
 function disk_test {
+	if [[ "$ARCH" = "aarch64" || "$ARCH" = "arm" ]]; then
+		FIO_SIZE=512M
+	else
+		FIO_SIZE=2G
+	fi
+
+	# run a quick test to generate the fio test file to be used by the actual tests
+	echo -en "Generating fio test file..."
+	$FIO_CMD --name=setup --ioengine=libaio --rw=read --bs=64k --iodepth=64 --numjobs=2 --size=$FIO_SIZE --runtime=1 --gtod_reduce=1 --filename=$DISK_PATH/test.fio --direct=1 --minimal &> /dev/null
+	echo -en "\r\033[0K"
+
+	# get array of block sizes to evaluate
+	BLOCK_SIZES=("$@")
+
+	for BS in "${BLOCK_SIZES[@]}"; do
+		# run rand read/write mixed fio test with block size = $BS
+		echo -en "Running fio random mixed R+W disk test with $BS block size..."
+		DISK_TEST=$(timeout 35 $FIO_CMD --name=rand_rw_$BS --ioengine=libaio --rw=randrw --rwmixread=50 --bs=$BS --iodepth=64 --numjobs=2 --size=$FIO_SIZE --runtime=30 --gtod_reduce=1 --direct=1 --filename=$DISK_PATH/test.fio --group_reporting --minimal 2> /dev/null | grep rand_rw_$BS)
+		DISK_IOPS_R=$(echo $DISK_TEST | awk -F';' '{print $8}')
+		DISK_IOPS_W=$(echo $DISK_TEST | awk -F';' '{print $49}')
+		DISK_IOPS=$(awk -v a="$DISK_IOPS_R" -v b="$DISK_IOPS_W" 'BEGIN { print a + b }')
+		DISK_TEST_R=$(echo $DISK_TEST | awk -F';' '{print $7}')
+		DISK_TEST_W=$(echo $DISK_TEST | awk -F';' '{print $48}')
+		DISK_TEST=$(awk -v a="$DISK_TEST_R" -v b="$DISK_TEST_W" 'BEGIN { print a + b }')
+		DISK_RESULTS_RAW+=( "$DISK_TEST" "$DISK_TEST_R" "$DISK_TEST_W" "$DISK_IOPS" "$DISK_IOPS_R" "$DISK_IOPS_W" )
+
+		DISK_IOPS=$(format_iops $DISK_IOPS)
+		DISK_IOPS_R=$(format_iops $DISK_IOPS_R)
+		DISK_IOPS_W=$(format_iops $DISK_IOPS_W)
+		DISK_TEST=$(format_speed $DISK_TEST)
+		DISK_TEST_R=$(format_speed $DISK_TEST_R)
+		DISK_TEST_W=$(format_speed $DISK_TEST_W)
+
+		DISK_RESULTS+=( "$DISK_TEST" "$DISK_TEST_R" "$DISK_TEST_W" "$DISK_IOPS" "$DISK_IOPS_R" "$DISK_IOPS_W" )
+		echo -en "\r\033[0K"
+	done
 }
 
 # dd_test
@@ -69,6 +105,34 @@ function disk_test {
 # Parameters:
 #          - (none)
 function dd_test {
+	I=0
+	DISK_WRITE_TEST_RES=()
+	DISK_READ_TEST_RES=()
+	DISK_WRITE_TEST_AVG=0
+	DISK_READ_TEST_AVG=0
+
+	# run the disk speed tests (write and read) thrice over
+	while [ $I -lt 3 ]
+	do
+		# write test using dd, "direct" flag is used to test direct I/O for data being stored to disk
+		DISK_WRITE_TEST=$(dd if=/dev/zero of=$DISK_PATH/$DATE.test bs=64k count=16k oflag=direct |& grep copied | awk '{ print $(NF-1) " " $(NF)}')
+		VAL=$(echo $DISK_WRITE_TEST | cut -d " " -f 1)
+		[[ "$DISK_WRITE_TEST" == *"GB"* ]] && VAL=$(awk -v a="$VAL" 'BEGIN { print a * 1000 }')
+		DISK_WRITE_TEST_RES+=( "$DISK_WRITE_TEST" )
+		DISK_WRITE_TEST_AVG=$(awk -v a="$DISK_WRITE_TEST_AVG" -v b="$VAL" 'BEGIN { print a + b }')
+
+		# read test using dd using the 1G file written during the write test
+		DISK_READ_TEST=$(dd if=$DISK_PATH/$DATE.test of=/dev/null bs=8k |& grep copied | awk '{ print $(NF-1) " " $(NF)}')
+		VAL=$(echo $DISK_READ_TEST | cut -d " " -f 1)
+		[[ "$DISK_READ_TEST" == *"GB"* ]] && VAL=$(awk -v a="$VAL" 'BEGIN { print a * 1000 }')
+		DISK_READ_TEST_RES+=( "$DISK_READ_TEST" )
+		DISK_READ_TEST_AVG=$(awk -v a="$DISK_READ_TEST_AVG" -v b="$VAL" 'BEGIN { print a + b }')
+
+		I=$(( $I + 1 ))
+	done
+	# calculate the write and read speed averages using the results from the three runs
+	DISK_WRITE_TEST_AVG=$(awk -v a="$DISK_WRITE_TEST_AVG" 'BEGIN { print a / 3 }')
+	DISK_READ_TEST_AVG=$(awk -v a="$DISK_READ_TEST_AVG" 'BEGIN { print a / 3 }')
 }
 
 # check if disk performance is being tested and the host has required space (2G)
@@ -224,7 +288,6 @@ elif [ -z "$SKIP_FIO" ]; then
 		[[ ! -z $JSON ]] && JSON_RESULT=${JSON_RESULT::${#JSON_RESULT}-1} && JSON_RESULT+=']'
 	fi
 fi
-
 speed_test() {
     local nodeName="$2"
     [ -z "$1" ] && ./speedtest-cli/speedtest --progress=no --accept-license --accept-gdpr > ./speedtest-cli/speedtest.log 2>&1 || \
